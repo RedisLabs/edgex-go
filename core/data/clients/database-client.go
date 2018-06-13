@@ -26,6 +26,7 @@ const (
 	MONGO DatabaseType = iota
 	INFLUX
 	MEMORY
+	REDIS
 )
 
 type DBClient interface {
@@ -233,6 +234,14 @@ func NewDBClient(config DBConfiguration) (DBClient, error) {
 		// Create the memory client
 		mem := &memDB{}
 		return mem, nil
+	case REDIS:
+		// Create the Redis client
+		rc, err := newRedisClient(config)
+		if err != nil {
+			loggingClient.Error("Error creating the Redis client: " + err.Error())
+			return nil, err
+		}
+		return rc, nil
 	default:
 		return nil, ErrUnsupportedDatabase
 	}
