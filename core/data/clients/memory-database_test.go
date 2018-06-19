@@ -660,6 +660,7 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	var readings []string
 
 	b.Run("AddReading", func(b *testing.B) {
+		b.N = 1000
 		reading := models.Reading{}
 		for i := 0; i < b.N; i++ {
 			reading.Name = "test" + strconv.Itoa(i)
@@ -673,6 +674,7 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("Readings", func(b *testing.B) {
+		b.N = 10
 		for i := 0; i < b.N; i++ {
 			_, err := db.Readings()
 			if err != nil {
@@ -682,6 +684,7 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingCount", func(b *testing.B) {
+		b.N = 100
 		for i := 0; i < b.N; i++ {
 			_, err := db.ReadingCount()
 			if err != nil {
@@ -691,6 +694,7 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingById", func(b *testing.B) {
+		b.N = 100
 		if b.N > len(readings) {
 			b.N = len(readings)
 		}
@@ -703,6 +707,7 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingsByDevice", func(b *testing.B) {
+		b.N = 100
 		if b.N > len(readings)/10 {
 			b.N = len(readings) / 10
 		}
@@ -731,6 +736,7 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 		event.Readings = append(event.Readings, reading)
 		event.Readings = append(event.Readings, reading)
 		event.Readings = append(event.Readings, reading)
+		b.N = 1000
 		for i := 0; i < b.N; i++ {
 			event.Device = "device" + strconv.Itoa(i/100)
 			id, err := db.AddEvent(&event)
@@ -742,6 +748,7 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("Events", func(b *testing.B) {
+		b.N = 10
 		for i := 0; i < b.N; i++ {
 			_, err := db.Events()
 			if err != nil {
@@ -751,6 +758,7 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventCount", func(b *testing.B) {
+		b.N = 100
 		for i := 0; i < b.N; i++ {
 			_, err := db.EventCount()
 			if err != nil {
@@ -760,6 +768,7 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventById", func(b *testing.B) {
+		b.N = 100
 		if b.N > len(events) {
 			b.N = len(events)
 		}
@@ -772,6 +781,7 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventsForDevice", func(b *testing.B) {
+		b.N = 100
 		if b.N > len(events)/10 {
 			b.N = len(events) / 10
 		}
