@@ -607,12 +607,10 @@ func (rc *RedisClient) UpdateValueDescriptor(v models.ValueDescriptor) error {
 
 	id := v.Id.Hex()
 	o, err := valueByName(conn, v.Name)
-	if err != nil {
-		if err != redis.ErrNil {
-			return err
-		}
+	if err != nil && err != redis.ErrNil {
+		return err
 	}
-	if err != redis.ErrNil && o.Id != v.Id {
+	if err == nil && o.Id != v.Id {
 		// IDs are different -> name not unique
 		return ErrNotUnique
 	}
@@ -676,13 +674,11 @@ func (rc *RedisClient) ValueDescriptorsByName(names []string) (values []models.V
 
 	for _, name := range names {
 		value, err := valueByName(conn, name)
-		if err != nil {
-			if err != redis.ErrNil {
-				return nil, err
-			}
+		if err != nil && err != redis.ErrNil {
+			return nil, err
 		}
 
-		if err != redis.ErrNil {
+		if err == nil {
 			values = append(values, value)
 		}
 	}
