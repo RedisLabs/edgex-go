@@ -20,15 +20,20 @@ import (
 	"github.com/imdario/mergo"
 
 	"github.com/edgexfoundry/edgex-go/core/domain/models"
-	"github.com/garyburd/redigo/redis"
+	"github.com/gomodule/redigo/redis"
 	"gopkg.in/mgo.v2/bson"
 )
 
 var currentRedisClient *RedisClient
 
+var getObjectsByRange = getObjectsByRangeLua
+var getObjectsByRangeFilter = getObjectsByRangeFilterLua
+var getObjectsByScore = getObjectsByScoreLua
+
 // RedisClient represents a client
 type RedisClient struct {
-	Pool *redis.Pool // Connections to Redis
+	Pool       *redis.Pool // Connections to Redis
+	isEmbedded bool
 }
 
 // Return a pointer to the RedisClient
@@ -37,24 +42,49 @@ func newRedisClient(config DBConfiguration) (*RedisClient, error) {
 		connectionString := config.Host + ":" + strconv.Itoa(config.Port)
 		loggingClient.Info("INFO: Connecting to Redis at: " + connectionString)
 
+		var proto, addr string
+
+		opts := []redis.DialOption{
+			redis.DialPassword(config.Password),
+			redis.DialConnectTimeout(time.Duration(config.Timeout) * time.Millisecond),
+		}
+
+		dialFunc := func() (redis.Conn, error) {
+			// TODO: add timeout and password from config
+			conn, err := redis.Dial(
+				proto, addr, opts...,
+			)
+			if err != nil {
+				loggingClient.Error("Error dialing the Redis server: " + err.Error())
+				return nil, err
+			}
+			return conn, nil
+		}
+
+		embedded := (config.Host == "")
+		if embedded {
+			// embedded
+			proto = "eredis"
+			addr = ""
+		} else {
+			if string(config.Host[0]) == "/" {
+				// unix domain socket
+				proto = "unix"
+				addr = config.Host
+			} else {
+				// network connection
+				proto = "tcp"
+				addr = connectionString
+			}
+		}
+
 		pool := &redis.Pool{
 			MaxIdle:     10,
 			IdleTimeout: 0,
-
-			Dial: func() (redis.Conn, error) {
-				// TODO: add timeout and password from config
-				conn, err := redis.Dial(
-					"tcp", connectionString,
-				)
-				if err != nil {
-					loggingClient.Error("Error dialing the Redis server: " + err.Error())
-					return nil, err
-				}
-				return conn, nil
-			},
+			Dial:        dialFunc,
 		}
 
-		currentRedisClient = &RedisClient{Pool: pool}
+		currentRedisClient = &RedisClient{Pool: pool, isEmbedded: (proto == "eredis")}
 	}
 
 	return currentRedisClient, nil
@@ -607,12 +637,10 @@ func (rc *RedisClient) UpdateValueDescriptor(v models.ValueDescriptor) error {
 
 	id := v.Id.Hex()
 	o, err := valueByName(conn, v.Name)
-	if err != nil {
-		if err != redis.ErrNil {
-			return err
-		}
+	if err != nil && err != redis.ErrNil {
+		return err
 	}
-	if err != redis.ErrNil && o.Id != v.Id {
+	if err == nil && o.Id != v.Id {
 		// IDs are different -> name not unique
 		return ErrNotUnique
 	}
@@ -676,13 +704,11 @@ func (rc *RedisClient) ValueDescriptorsByName(names []string) (values []models.V
 
 	for _, name := range names {
 		value, err := valueByName(conn, name)
-		if err != nil {
-			if err != redis.ErrNil {
-				return nil, err
-			}
+		if err != nil && err != redis.ErrNil {
+			return nil, err
 		}
 
-		if err != redis.ErrNil {
+		if err == nil {
 			values = append(values, value)
 		}
 	}
@@ -1139,7 +1165,7 @@ func unlinkCollection(conn redis.Conn, col string) error {
 	return err
 }
 
-func getObjectsByRange(conn redis.Conn, key string, start, end int) (objects []interface{}, err error) {
+func getObjectsByRangeLua(conn redis.Conn, key string, start, end int) (objects []interface{}, err error) {
 	s := scripts["getObjectsByRange"]
 	objects, err = redis.Values(s.Do(conn, key, start, end))
 	if err != nil {
@@ -1149,7 +1175,7 @@ func getObjectsByRange(conn redis.Conn, key string, start, end int) (objects []i
 	return objects, nil
 }
 
-func getObjectsByRangeFilter(conn redis.Conn, key string, filter string, start, end int) (objects []interface{}, err error) {
+func getObjectsByRangeFilterLua(conn redis.Conn, key string, filter string, start, end int) (objects []interface{}, err error) {
 	s := scripts["getObjectsByRangeFilter"]
 	objects, err = redis.Values(s.Do(conn, key, filter, start, end))
 	if err != nil {
@@ -1162,7 +1188,7 @@ func getObjectsByRangeFilter(conn redis.Conn, key string, filter string, start, 
 // Return objects by a score from a zset
 // if limit is 0, all are returned
 // if end is negative, it is considered as positive infinity
-func getObjectsByScore(conn redis.Conn, key string, start, end int64, limit int) (objects []interface{}, err error) {
+func getObjectsByScoreLua(conn redis.Conn, key string, start, end int64, limit int) (objects []interface{}, err error) {
 	s := scripts["getObjectsByScore"]
 	objects, err = redis.Values(s.Do(conn, key, start, end, limit))
 	if err != nil {
@@ -1250,4 +1276,69 @@ func valueFromObject(o interface{}) (value models.ValueDescriptor, err error) {
 	}
 
 	return value, nil
+}
+
+func getObjectsByRangeEmbedded(conn redis.Conn, key string, start, end int) (objects []interface{}, err error) {
+	oids, err := redis.Values(conn.Do("ZRANGE", key, start, end))
+	if err != nil && err != redis.ErrNil {
+		return objects, err
+	}
+
+	if len(oids) > 0 {
+		objects, err = redis.Values(conn.Do("MGET", oids...))
+		if err != nil && err != redis.ErrNil {
+			return objects, err
+		}
+	}
+	return objects, nil
+}
+
+func getObjectsByRangeFilterEmbedded(conn redis.Conn, key string, filter string, start, end int) (objects []interface{}, err error) {
+	oids, err := redis.Strings(conn.Do("ZRANGE", key, start, end))
+	if err != nil && err != redis.ErrNil {
+		return objects, err
+	}
+	for _, oid := range oids {
+		_, err := conn.Do("ZSCORE", filter, oid)
+		if err != nil && err != redis.ErrNil {
+			return objects, err
+		}
+		if err != redis.ErrNil {
+			o, err := conn.Do("GET", oid)
+			if err != nil && err != redis.ErrNil {
+				return objects, err
+			}
+			objects = append(objects, o)
+		}
+	}
+
+	return objects, nil
+}
+
+func getObjectsByScoreEmbedded(conn redis.Conn, key string, start, end int64, limit int) (objects []interface{}, err error) {
+	args := []interface{}{
+		key, start,
+	}
+	if end < 0 {
+		args = append(args, "+inf")
+	} else {
+		args = append(args, end)
+	}
+	if limit != 0 {
+		args = append(args, "LIMIT")
+		args = append(args, 0)
+		args = append(args, limit)
+	}
+
+	oids, err := redis.Strings(conn.Do("ZRANGEBYSCORE", args...))
+	if err != nil && err != redis.ErrNil {
+		return objects, err
+	}
+
+	objects, err = redis.Values(conn.Do("MGET", oids))
+	if err != nil && err != redis.ErrNil {
+		return objects, err
+	}
+
+	return objects, nil
 }

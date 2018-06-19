@@ -6,9 +6,14 @@
 
 // +build redisRunning
 
-// This test will only be executed if the tag redusRunning is added when running
+// This test will only be executed if the tag redisRunning is added when running
 // the tests with a command like:
-// go test -tags redisRunning
+// LD_LIBRARY_PATH=$GOROOT/src/github.com/redislab/eredis/redis/src go test -tags redisRunning
+
+// To test Redis, specify the a `Host` value as follows:
+// * TCP connection: use the IP address or host name
+// * Unix domain socket: use the path to the socket file (e.g. /tmp/redis.sock)
+// * Embedded: leave empty
 
 package clients
 
