@@ -14,7 +14,6 @@
 package clients
 
 import (
-	"encoding/json"
 	"strconv"
 	"time"
 
@@ -34,26 +33,31 @@ type RedisClient struct {
 
 // Return a pointer to the RedisClient
 func newRedisClient(config DBConfiguration) (*RedisClient, error) {
-	connectionString := config.Host + ":" + strconv.Itoa(config.Port)
-	loggingClient.Info("INFO: Connecting to Redis at: " + connectionString)
-	pool := &redis.Pool{
-		MaxIdle:     10,
-		IdleTimeout: 0,
+	if currentRedisClient == nil {
+		connectionString := config.Host + ":" + strconv.Itoa(config.Port)
+		loggingClient.Info("INFO: Connecting to Redis at: " + connectionString)
 
-		Dial: func() (redis.Conn, error) {
-			// TODO: add timeout and password from config
-			conn, err := redis.Dial("tcp", connectionString)
-			if err != nil {
-				loggingClient.Error("Error dialing the Redis server: " + err.Error())
-				return nil, err
-			}
-			return conn, nil
-		},
+		pool := &redis.Pool{
+			MaxIdle:     10,
+			IdleTimeout: 0,
+
+			Dial: func() (redis.Conn, error) {
+				// TODO: add timeout and password from config
+				conn, err := redis.Dial(
+					"tcp", connectionString,
+				)
+				if err != nil {
+					loggingClient.Error("Error dialing the Redis server: " + err.Error())
+					return nil, err
+				}
+				return conn, nil
+			},
+		}
+
+		currentRedisClient = &RedisClient{Pool: pool}
 	}
 
-	rc := &RedisClient{Pool: pool}
-	currentRedisClient = rc // Set the singleton
-	return rc, nil
+	return currentRedisClient, nil
 }
 
 // CloseSession closes the connections to Redis
@@ -73,7 +77,9 @@ func (rc *RedisClient) Events() (events []models.Event, err error) {
 
 	objects, err := getObjectsByRange(conn, EVENTS_COLLECTION, 0, -1)
 	if err != nil {
-		return events, err
+		if err != redis.ErrNil {
+			return events, err
+		}
 	}
 
 	events, err = eventsFromObjects(objects)
@@ -110,10 +116,10 @@ func (rc *RedisClient) UpdateEvent(e models.Event) (err error) {
 	id := e.ID.Hex()
 
 	o, err := eventByID(conn, id)
-	if err == redis.ErrNil {
-		return ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return ErrNotFound
+		}
 		return err
 	}
 
@@ -142,10 +148,10 @@ func (rc *RedisClient) EventById(id string) (event models.Event, err error) {
 	defer conn.Close()
 
 	event, err = eventByID(conn, id)
-	if err == redis.ErrNil {
-		return event, ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return event, ErrNotFound
+		}
 		return event, err
 	}
 
@@ -192,12 +198,13 @@ func (rc *RedisClient) DeleteEventById(id string) (err error) {
 	defer conn.Close()
 
 	err = deleteEvent(conn, id)
-	if err == redis.ErrNil {
-		return ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return ErrNotFound
+		}
 		return err
 	}
+
 	return nil
 }
 
@@ -208,7 +215,9 @@ func (rc *RedisClient) EventsForDeviceLimit(id string, limit int) (events []mode
 
 	objects, err := getObjectsByRange(conn, EVENTS_COLLECTION+":device:"+id, 0, limit-1)
 	if err != nil {
-		return events, err
+		if err != redis.ErrNil {
+			return events, err
+		}
 	}
 
 	events, err = eventsFromObjects(objects)
@@ -239,7 +248,9 @@ func (rc *RedisClient) EventsByCreationTime(startTime, endTime int64, limit int)
 
 	objects, err := getObjectsByScore(conn, EVENTS_COLLECTION+":created", startTime, endTime, limit)
 	if err != nil {
-		return events, err
+		if err != redis.ErrNil {
+			return events, err
+		}
 	}
 
 	events, err = eventsFromObjects(objects)
@@ -329,11 +340,10 @@ func (rc *RedisClient) ScrubAllEvents() (err error) {
 
 // ********************* READING FUNCTIONS *************************
 // Return a list of readings sorted by reading id
-func (rc *RedisClient) Readings() ([]models.Reading, error) {
+func (rc *RedisClient) Readings() (readings []models.Reading, err error) {
 	conn := rc.Pool.Get()
 	defer conn.Close()
 
-	readings := []models.Reading{}
 	objects, err := getObjectsByRange(conn, READINGS_COLLECTION, 0, -1)
 	if err != nil {
 		return readings, err
@@ -353,7 +363,7 @@ func (rc *RedisClient) AddReading(r models.Reading) (id bson.ObjectId, err error
 	conn := rc.Pool.Get()
 	defer conn.Close()
 
-	err = addReading(conn, &r)
+	err = addReading(conn, true, &r)
 	if err != nil {
 		return r.Id, err
 	}
@@ -373,10 +383,10 @@ func (rc *RedisClient) UpdateReading(r models.Reading) error {
 	id := r.Id.Hex()
 
 	o, err := readingByID(conn, id)
-	if err == redis.ErrNil {
-		return ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return ErrNotFound
+		}
 		return err
 	}
 
@@ -390,8 +400,7 @@ func (rc *RedisClient) UpdateReading(r models.Reading) error {
 	if err != nil {
 		return err
 	}
-
-	err = addReading(conn, &r)
+	err = addReading(conn, true, &r)
 	if err != nil {
 		return err
 	}
@@ -405,10 +414,10 @@ func (rc *RedisClient) ReadingById(id string) (reading models.Reading, err error
 	defer conn.Close()
 
 	reading, err = readingByID(conn, id)
-	if err == redis.ErrNil {
-		return reading, ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return reading, ErrNotFound
+		}
 		return reading, err
 	}
 
@@ -451,7 +460,9 @@ func (rc *RedisClient) ReadingsByDevice(id string, limit int) (readings []models
 
 	objects, err := getObjectsByRange(conn, READINGS_COLLECTION+":device:"+id, 0, limit-1)
 	if err != nil {
-		return readings, err
+		if err != redis.ErrNil {
+			return readings, err
+		}
 	}
 
 	readings, err = readingsFromObjects(objects)
@@ -470,7 +481,9 @@ func (rc *RedisClient) ReadingsByValueDescriptor(name string, limit int) (readin
 
 	objects, err := getObjectsByRange(conn, READINGS_COLLECTION+":name:"+name, 0, limit-1)
 	if err != nil {
-		return readings, err
+		if err != redis.ErrNil {
+			return readings, err
+		}
 	}
 
 	readings, err = readingsFromObjects(objects)
@@ -494,15 +507,17 @@ func (rc *RedisClient) ReadingsByValueDescriptorNames(names []string, limit int)
 	for _, name := range names {
 		objects, err := getObjectsByRange(conn, READINGS_COLLECTION+":name:"+name, 0, limit)
 		if err != nil {
-			return readings, err
+			if err != redis.ErrNil {
+				return readings, err
+			}
 		}
 
-		temp, err := readingsFromObjects(objects)
+		t, err := readingsFromObjects(objects)
 		if err != nil {
 			return readings, err
 		}
 
-		readings = append(readings, temp...)
+		readings = append(readings, t...)
 
 		limit -= len(objects)
 		if limit < 0 {
@@ -541,6 +556,7 @@ func (rc *RedisClient) ReadingsByCreationTime(start, end int64, limit int) (read
 	if err != nil {
 		return readings, err
 	}
+
 	return readings, nil
 }
 
@@ -591,15 +607,14 @@ func (rc *RedisClient) UpdateValueDescriptor(v models.ValueDescriptor) error {
 
 	id := v.Id.Hex()
 	o, err := valueByName(conn, v.Name)
-	if err != redis.ErrNil {
-		if err != nil {
+	if err != nil {
+		if err != redis.ErrNil {
 			return err
 		}
-
+	}
+	if err != redis.ErrNil && o.Id != v.Id {
 		// IDs are different -> name not unique
-		if o.Id != v.Id {
-			return ErrNotUnique
-		}
+		return ErrNotUnique
 	}
 
 	v.Modified = time.Now().UnixNano() / int64(time.Millisecond)
@@ -629,10 +644,10 @@ func (rc *RedisClient) DeleteValueDescriptorById(id string) error {
 	defer conn.Close()
 
 	err := deleteValue(conn, id)
-	if err == redis.ErrNil {
-		return ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return ErrNotFound
+		}
 		return err
 	}
 	return nil
@@ -644,10 +659,10 @@ func (rc *RedisClient) ValueDescriptorByName(name string) (value models.ValueDes
 	defer conn.Close()
 
 	value, err = valueByName(conn, name)
-	if err == redis.ErrNil {
-		return value, ErrNotFound
-	}
 	if err != nil {
+		if err == redis.ErrNil {
+			return value, ErrNotFound
+		}
 		return value, err
 	}
 
@@ -661,10 +676,13 @@ func (rc *RedisClient) ValueDescriptorsByName(names []string) (values []models.V
 
 	for _, name := range names {
 		value, err := valueByName(conn, name)
-		if err != redis.ErrNil {
-			if err != nil {
-				return values, err
+		if err != nil {
+			if err != redis.ErrNil {
+				return nil, err
 			}
+		}
+
+		if err != redis.ErrNil {
 			values = append(values, value)
 		}
 	}
@@ -698,7 +716,9 @@ func (rc *RedisClient) ValueDescriptorsByUomLabel(uomLabel string) (values []mod
 
 	objects, err := getObjectsByRange(conn, VALUE_DESCRIPTOR_COLLECTION+":uomlabel:"+uomLabel, 0, -1)
 	if err != nil {
-		return values, err
+		if err != redis.ErrNil {
+			return values, err
+		}
 	}
 
 	values, err = valuesFromObjects(objects)
@@ -716,7 +736,9 @@ func (rc *RedisClient) ValueDescriptorsByLabel(label string) (values []models.Va
 
 	objects, err := getObjectsByRange(conn, VALUE_DESCRIPTOR_COLLECTION+":label:"+label, 0, -1)
 	if err != nil {
-		return values, err
+		if err != redis.ErrNil {
+			return values, err
+		}
 	}
 
 	values, err = valuesFromObjects(objects)
@@ -734,7 +756,9 @@ func (rc *RedisClient) ValueDescriptorsByType(t string) (values []models.ValueDe
 
 	objects, err := getObjectsByRange(conn, VALUE_DESCRIPTOR_COLLECTION+":type:"+t, 0, -1)
 	if err != nil {
-		return values, err
+		if err != redis.ErrNil {
+			return values, err
+		}
 	}
 
 	values, err = valuesFromObjects(objects)
@@ -752,7 +776,6 @@ func (rc *RedisClient) ScrubAllValueDescriptors() error {
 
 	err := unlinkCollection(conn, VALUE_DESCRIPTOR_COLLECTION)
 	if err != nil {
-		loggingClient.Error(err.Error())
 		return err
 	}
 
@@ -760,7 +783,7 @@ func (rc *RedisClient) ScrubAllValueDescriptors() error {
 }
 
 // ************************** HELPER FUNCTIONS ***************************
-func addEvent(conn redis.Conn, e *models.Event) error {
+func addEvent(conn redis.Conn, e *models.Event) (err error) {
 	if e.Created == 0 {
 		e.Created = time.Now().UnixNano() / int64(time.Millisecond)
 	}
@@ -768,31 +791,35 @@ func addEvent(conn redis.Conn, e *models.Event) error {
 		e.ID = bson.NewObjectId()
 	}
 	id := e.ID.Hex()
+	m, err := bson.Marshal(e)
+	if err != nil {
+		return err
+	}
+
+	conn.Send("MULTI")
+	conn.Send("SET", id, m)
+	conn.Send("ZADD", EVENTS_COLLECTION, 0, id)
+	conn.Send("ZADD", EVENTS_COLLECTION+":created", e.Created, id)
+	conn.Send("ZADD", EVENTS_COLLECTION+":pushed", e.Pushed, id)
+	conn.Send("ZADD", EVENTS_COLLECTION+":device:"+e.Device, e.Created, id)
 
 	rids := make([]interface{}, len(e.Readings)*2+1)
 	rids[0] = EVENTS_COLLECTION + ":readings:" + id
 	for i, r := range e.Readings {
 		r.Created = e.Created
 		r.Id = bson.NewObjectId()
-		err := addReading(conn, &r)
+		err := addReading(conn, false, &r)
 		if err != nil {
 			return err
 		}
 		rids[i*2+1] = 0
 		rids[i*2+2] = r.Id
 	}
-
-	conn.Send("MULTI")
-	conn.Send("SET", id, e.String())
-	conn.Send("ZADD", EVENTS_COLLECTION, 0, id)
-	conn.Send("ZADD", EVENTS_COLLECTION+":created", e.Created, id)
-	conn.Send("ZADD", EVENTS_COLLECTION+":pushed", e.Pushed, id)
-	conn.Send("ZADD", EVENTS_COLLECTION+":device:"+e.Device, e.Created, id)
 	if len(rids) > 1 {
 		conn.Send("ZADD", rids...)
 	}
 
-	_, err := conn.Do("EXEC")
+	_, err = conn.Do("EXEC")
 	if err != nil {
 		return err
 	}
@@ -849,7 +876,7 @@ func eventByID(conn redis.Conn, id string) (event models.Event, err error) {
 }
 
 // Add a reading to the database
-func addReading(conn redis.Conn, r *models.Reading) error {
+func addReading(conn redis.Conn, tx bool, r *models.Reading) (err error) {
 	if r.Created == 0 {
 		r.Created = time.Now().UnixNano() / int64(time.Millisecond)
 	}
@@ -857,16 +884,24 @@ func addReading(conn redis.Conn, r *models.Reading) error {
 		r.Id = bson.NewObjectId()
 	}
 	id := r.Id.Hex()
+	m, err := bson.Marshal(r)
+	if err != nil {
+		return err
+	}
 
-	conn.Send("MULTI")
-	conn.Send("SET", id, r.String())
+	if tx {
+		conn.Send("MULTI")
+	}
+	conn.Send("SET", id, m)
 	conn.Send("ZADD", READINGS_COLLECTION, 0, id)
 	conn.Send("ZADD", READINGS_COLLECTION+":created", r.Created, id)
 	conn.Send("ZADD", READINGS_COLLECTION+":device:"+r.Device, r.Created, id)
 	conn.Send("ZADD", READINGS_COLLECTION+":name:"+r.Name, r.Created, id)
-	_, err := conn.Do("EXEC")
-	if err != nil {
-		return err
+	if tx {
+		_, err = conn.Do("EXEC")
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -888,6 +923,7 @@ func deleteReading(conn redis.Conn, id string) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -897,7 +933,7 @@ func readingByID(conn redis.Conn, id string) (reading models.Reading, err error)
 		return reading, err
 	}
 
-	reading, err = readingFromObject(obj)
+	err = readingFromObject(obj, &reading)
 	if err != nil {
 		return reading, err
 	}
@@ -905,7 +941,7 @@ func readingByID(conn redis.Conn, id string) (reading models.Reading, err error)
 	return reading, nil
 }
 
-func addValue(conn redis.Conn, v *models.ValueDescriptor) error {
+func addValue(conn redis.Conn, v *models.ValueDescriptor) (err error) {
 	if v.Created == 0 {
 		v.Created = time.Now().UnixNano() / int64(time.Millisecond)
 	}
@@ -913,17 +949,21 @@ func addValue(conn redis.Conn, v *models.ValueDescriptor) error {
 		v.Id = bson.NewObjectId()
 	}
 	id := v.Id.Hex()
-
-	_, err := redis.String(conn.Do("HGET", VALUE_DESCRIPTOR_COLLECTION+":name", v.Name))
-	if err != nil && err != redis.ErrNil {
+	m, err := bson.Marshal(v)
+	if err != nil {
 		return err
 	}
-	if err != redis.ErrNil {
+
+	exists, err := redis.Bool(conn.Do("HEXISTS", VALUE_DESCRIPTOR_COLLECTION+":name", v.Name))
+	if err != nil {
+		return err
+	}
+	if exists {
 		return ErrNotUnique
 	}
 
 	conn.Send("MULTI")
-	conn.Send("SET", id, v.String())
+	conn.Send("SET", id, m)
 	conn.Send("ZADD", VALUE_DESCRIPTOR_COLLECTION, 0, id)
 	conn.Send("HSET", VALUE_DESCRIPTOR_COLLECTION+":name", v.Name, id)
 	conn.Send("ZADD", VALUE_DESCRIPTOR_COLLECTION+":uomlabel:"+v.UomLabel, 0, id)
@@ -993,45 +1033,114 @@ func valueByName(conn redis.Conn, name string) (value models.ValueDescriptor, er
 }
 
 // **********************
-
-// NOTE: not cluster safe
-func unlinkCollection(conn redis.Conn, col string) error {
-	s := redis.NewScript(1, `
-		redis.replicate_commands()
-		local ids = redis.call('ZRANGE', KEYS[1], 0, -1)
-		for _, id in ipairs(ids) do
-			redis.call('UNLINK', id)
+// Script notes:
+// * magic number 4096 is less < 8000 (redis:/deps/lua/lapi.c:LUAI_MAXCSTACK -> unpack error)
+// * assume single instance
+var scripts = map[string]redis.Script{
+	"getObjectsByRange": *redis.NewScript(1, `
+		local magic = 4096
+		local ids = redis.call('ZRANGE', KEYS[1], ARGV[1], ARGV[2])
+		local rep = {}
+		if #ids > 0 then
+			for i = 1, #ids, magic do
+				local temp = redis.call('MGET', unpack(ids, i, i+magic < #ids and i+magic or #ids))
+				for _, o in ipairs(temp) do
+					table.insert(rep, o)
+				end
+			end
+			return rep
+		else
+			return nil
 		end
+		`),
+	"getObjectsByRangeFilter": *redis.NewScript(2, `
+		local magic = 4096
+		local ids = redis.call('ZRANGE', KEYS[1], ARGV[1], ARGV[2])
+		local rep = {}
+		if #ids > 0 then
+			for i, id in ipairs(ids) do
+				local v = redis.call('ZSCORE', KEYS[2], id)
+				if v == nil then
+					ids[i] = nil
+				end
+			end
+			for i = 1, #ids, magic do
+				local temp = redis.call('MGET', unpack(ids, i, i+magic < #ids and i+magic or #ids))
+				for _, o in ipairs(temp) do
+					table.insert(rep, o)
+				end
+			end
+		else
+			return nil
+		end
+		return rep
+		`),
+	"getObjectsByScore": *redis.NewScript(1, `
+		local magic = 4096
+		local cmd = {
+			'ZRANGEBYSCORE', KEYS[1], ARGV[1],
+			tonumber(ARGV[2]) < 0 and '+inf' or ARGV[2],
+		}
+		if tonumber(ARGV[3]) ~= 0 then
+			table.insert(cmd, 'LIMIT')
+			table.insert(cmd, 0)
+			table.insert(cmd, ARGV[3])
+		end
+		local ids = redis.call(unpack(cmd))
+		local rep = {}
+		if #ids > 0 then
+			for i = 1, #ids, magic do
+				local temp = redis.call('MGET', unpack(ids, i, i+magic < #ids and i+magic or #ids))
+				for _, o in ipairs(temp) do
+					table.insert(rep, o)
+				end
+			end
+		else
+			return nil
+		end
+		return rep
+		`),
+	"unlinkZsetMembers": *redis.NewScript(1, `
+		local magic = 4096
+		local ids = redis.call('ZRANGE', KEYS[1], 0, -1)
+		if #ids > 0 then
+			for i = 1, #ids, magic do
+				redis.call('UNLINK', unpack(ids, i, i+magic < #ids and i+magic or #ids))
+			end
+		end
+		`),
+	"unlinkCollection": *redis.NewScript(0, `
+		local magic = 4096
+		redis.replicate_commands()
 		local c = 0
 		repeat
-			local s = redis.call('SCAN', c, 'MATCH', KEYS[1] .. '*')
+			local s = redis.call('SCAN', c, 'MATCH', ARGV[1] .. '*')
 			c = tonumber(s[1])
-			for _, k in ipairs(s[2]) do
-				redis.call('UNLINK', k)
-			end 
+			if #s[2] > 0 then
+				redis.call('UNLINK', unpack(s[2]))
+			end
 		until c == 0
-		`)
+		`),
+}
 
-	_, err := s.Do(conn, col)
+func unlinkCollection(conn redis.Conn, col string) error {
+	conn.Send("MULTI")
+	s := scripts["unlinkZsetMembers"]
+	s.Send(conn, col)
+	s = scripts["unlinkCollection"]
+	s.Send(conn, col)
+	_, err := conn.Do("EXEC")
 	if err != nil {
-		loggingClient.Info("ERR: " + err.Error())
-		return err
+		if err != redis.ErrNil {
+			return err
+		}
 	}
 
-	return nil
+	return err
 }
 
 func getObjectsByRange(conn redis.Conn, key string, start, end int) (objects []interface{}, err error) {
-	s := redis.NewScript(1, `
-		local ids = redis.call('ZRANGE', KEYS[1], ARGV[1], ARGV[2])
-		local rep = {}
-		for _, id in ipairs(ids) do
-			local r = redis.call('GET', id)
-			table.insert(rep, r)
-		end
-		return rep
-		`)
-
+	s := scripts["getObjectsByRange"]
 	objects, err = redis.Values(s.Do(conn, key, start, end))
 	if err != nil {
 		return nil, err
@@ -1041,19 +1150,7 @@ func getObjectsByRange(conn redis.Conn, key string, start, end int) (objects []i
 }
 
 func getObjectsByRangeFilter(conn redis.Conn, key string, filter string, start, end int) (objects []interface{}, err error) {
-	s := redis.NewScript(2, `
-		local ids = redis.call('ZRANGE', KEYS[1], ARGV[1], ARGV[2])
-		local rep = {}
-		for _, id in ipairs(ids) do
-			local v = redis.call('ZSCORE', KEYS[2], id)
-			if v ~= nil then
-				local r = redis.call('GET', id)
-				table.insert(rep, r)
-			end
-		end
-		return rep
-		`)
-
+	s := scripts["getObjectsByRangeFilter"]
 	objects, err = redis.Values(s.Do(conn, key, filter, start, end))
 	if err != nil {
 		return nil, err
@@ -1066,25 +1163,7 @@ func getObjectsByRangeFilter(conn redis.Conn, key string, filter string, start, 
 // if limit is 0, all are returned
 // if end is negative, it is considered as positive infinity
 func getObjectsByScore(conn redis.Conn, key string, start, end int64, limit int) (objects []interface{}, err error) {
-	s := redis.NewScript(1, `
-		local cmd = {
-			'ZRANGEBYSCORE', KEYS[1], ARGV[1],
-			tonumber(ARGV[2]) < 0 and '+inf' or ARGV[2],
-		}
-		if tonumber(ARGV[3]) ~= 0 then
-			table.insert(cmd, 'LIMIT')
-			table.insert(cmd, 0)
-			table.insert(cmd, ARGV[3])
-		end
-		local ids = redis.call(unpack(cmd))
-		local rep = {}
-		for _, id in ipairs(ids) do
-			local r = redis.call('GET', id)
-			table.insert(rep, r)
-		end
-		return rep
-		`)
-
+	s := scripts["getObjectsByScore"]
 	objects, err = redis.Values(s.Do(conn, key, start, end, limit))
 	if err != nil {
 		return nil, err
@@ -1113,7 +1192,7 @@ func eventFromObject(o interface{}) (event models.Event, err error) {
 		return event, err
 	}
 
-	err = json.Unmarshal(b, &event)
+	err = bson.Unmarshal(b, &event)
 	if err != nil {
 		return event, err
 	}
@@ -1122,28 +1201,30 @@ func eventFromObject(o interface{}) (event models.Event, err error) {
 }
 
 func readingsFromObjects(objects []interface{}) (readings []models.Reading, err error) {
-	for _, o := range objects {
-		r, err := readingFromObject(o)
+	readings = make([]models.Reading, len(objects))
+	for i, o := range objects {
+		r := models.Reading{}
+		err := readingFromObject(o, &r)
 		if err != nil {
 			return readings, err
 		}
-		readings = append(readings, r)
+		readings[i] = r
 	}
 	return readings, nil
 }
 
-func readingFromObject(o interface{}) (reading models.Reading, err error) {
+func readingFromObject(o interface{}, reading *models.Reading) (err error) {
 	b, err := redis.Bytes(o, nil)
 	if err != nil {
-		return reading, err
+		return err
 	}
 
-	err = json.Unmarshal(b, &reading)
+	err = bson.Unmarshal(b, reading)
 	if err != nil {
-		return reading, err
+		return err
 	}
 
-	return reading, nil
+	return nil
 }
 
 func valuesFromObjects(objects []interface{}) (values []models.ValueDescriptor, err error) {
@@ -1163,7 +1244,7 @@ func valueFromObject(o interface{}) (value models.ValueDescriptor, err error) {
 		return value, err
 	}
 
-	err = json.Unmarshal(b, &value)
+	err = bson.Unmarshal(b, &value)
 	if err != nil {
 		return value, err
 	}
