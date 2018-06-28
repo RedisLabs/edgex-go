@@ -654,12 +654,14 @@ func benchmarkDB(b *testing.B, config DBConfiguration) {
 
 func benchmarkReadings(b *testing.B, db DBClient) {
 
-	// Remove previous events and readings
-	db.ScrubAllEvents()
-
 	var readings []string
 
 	b.Run("AddReading", func(b *testing.B) {
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		b.ResetTimer()
+
+		fmt.Println("addReading!!!")
 		b.N = 1000
 		reading := models.Reading{}
 		for i := 0; i < b.N; i++ {
@@ -723,12 +725,13 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 
 func benchmarkEvents(b *testing.B, db DBClient) {
 
-	// Remove previous events and readings
-	db.ScrubAllEvents()
-
 	var events []string
 
 	b.Run("AddEvent", func(b *testing.B) {
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		b.ResetTimer()
+
 		event := models.Event{}
 		reading := models.Reading{}
 		event.Readings = append(event.Readings, reading)
