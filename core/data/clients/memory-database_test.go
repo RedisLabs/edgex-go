@@ -20,9 +20,10 @@ func populateDbReadings(db DBClient, count int) (bson.ObjectId, error) {
 	var id bson.ObjectId
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("name%d", i)
+		device := fmt.Sprintf("device" + strconv.Itoa(i/100))
 		r := models.Reading{}
 		r.Name = name
-		r.Device = name
+		r.Device = device
 		r.Value = name
 		var err error
 		id, err = db.AddReading(r)
@@ -52,14 +53,24 @@ func populateDbValues(db DBClient, count int) (bson.ObjectId, error) {
 	return id, nil
 }
 
-func populateDbEvents(db DBClient, count int, pushed int64) (bson.ObjectId, error) {
+func populateDbEvents(db DBClient, count, readingsCount int, pushed int64) (bson.ObjectId, error) {
 	var id bson.ObjectId
+
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("name%d", i)
+		device := fmt.Sprintf("device" + strconv.Itoa(i/100))
 		e := models.Event{}
-		e.Device = name
+		e.Device = device
 		e.Event = name
 		e.Pushed = pushed
+		for j := 0; j < readingsCount; j++ {
+			r := models.Reading{
+				Pushed: pushed,
+				Device: device,
+				Name:   fmt.Sprintf("name%d", j),
+			}
+			e.Readings = append(e.Readings, r)
+		}
 		var err error
 		id, err = db.AddEvent(&e)
 		if err != nil {
@@ -270,13 +281,13 @@ func testDBEvents(t *testing.T, db DBClient) {
 	}
 
 	beforeTime := time.Now().UnixNano() / int64(time.Millisecond)
-	id, err := populateDbEvents(db, 100, 0)
+	id, err := populateDbEvents(db, 0, 100, 0)
 	if err != nil {
 		t.Fatalf("Error populating db: %v\n", err)
 	}
 
 	// To have two events with the same name
-	id, err = populateDbEvents(db, 10, 1)
+	id, err = populateDbEvents(db, 0, 10, 1)
 	if err != nil {
 		t.Fatalf("Error populating db: %v\n", err)
 	}
@@ -654,29 +665,31 @@ func benchmarkDB(b *testing.B, config DBConfiguration) {
 
 func benchmarkReadings(b *testing.B, db DBClient) {
 
-	var readings []string
-
 	b.Run("AddReading", func(b *testing.B) {
+		b.StopTimer()
 		// Remove previous events and readings
 		db.ScrubAllEvents()
-		b.ResetTimer()
+		b.StartTimer()
 
-		fmt.Println("addReading!!!")
-		b.N = 1000
 		reading := models.Reading{}
 		for i := 0; i < b.N; i++ {
 			reading.Name = "test" + strconv.Itoa(i)
 			reading.Device = "device" + strconv.Itoa(i/100)
-			id, err := db.AddReading(reading)
+			_, err := db.AddReading(reading)
 			if err != nil {
 				b.Fatalf("Error add reading: %v", err)
 			}
-			readings = append(readings, id.Hex())
 		}
 	})
 
 	b.Run("Readings", func(b *testing.B) {
-		b.N = 10
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N readings
+		populateDbReadings(db, b.N)
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.Readings()
 			if err != nil {
@@ -686,7 +699,13 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingCount", func(b *testing.B) {
-		b.N = 100
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N
+		populateDbReadings(db, b.N)
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.ReadingCount()
 			if err != nil {
@@ -696,10 +715,18 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingById", func(b *testing.B) {
-		b.N = 100
-		if b.N > len(readings) {
-			b.N = len(readings)
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N readings
+		populateDbReadings(db, b.N)
+		rs, _ := db.Readings()
+		readings := make([]string, len(rs))
+		for i, r := range rs {
+			readings[i] = r.Id.Hex()
 		}
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.ReadingById(readings[i])
 			if err != nil {
@@ -709,12 +736,20 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 	})
 
 	b.Run("ReadingsByDevice", func(b *testing.B) {
-		b.N = 100
-		if b.N > len(readings)/10 {
-			b.N = len(readings) / 10
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N device readings (100 each)
+		populateDbReadings(db, b.N*100)
+		rs, _ := db.Readings()
+		readings := make([]string, len(rs))
+		for i, r := range rs {
+			readings[i] = r.Id.Hex()
 		}
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
-			device := "device" + strconv.Itoa(i)
+			device := "device" + strconv.Itoa(i/100)
 			_, err := db.ReadingsByDevice(device, 100)
 			if err != nil {
 				b.Fatalf("Error reading by device: %v", err)
@@ -725,33 +760,40 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 
 func benchmarkEvents(b *testing.B, db DBClient) {
 
-	var events []string
-
 	b.Run("AddEvent", func(b *testing.B) {
+		b.StopTimer()
 		// Remove previous events and readings
 		db.ScrubAllEvents()
-		b.ResetTimer()
+		b.StartTimer()
 
-		event := models.Event{}
-		reading := models.Reading{}
-		event.Readings = append(event.Readings, reading)
-		event.Readings = append(event.Readings, reading)
-		event.Readings = append(event.Readings, reading)
-		event.Readings = append(event.Readings, reading)
-		event.Readings = append(event.Readings, reading)
-		b.N = 1000
 		for i := 0; i < b.N; i++ {
-			event.Device = "device" + strconv.Itoa(i/100)
-			id, err := db.AddEvent(&event)
+			device := fmt.Sprintf("device" + strconv.Itoa(i/100))
+			e := models.Event{
+				Device: device,
+			}
+			for j := 0; j < 5; j++ {
+				r := models.Reading{
+					Device: device,
+					Name:   fmt.Sprintf("name%d", j),
+				}
+				e.Readings = append(e.Readings, r)
+
+			}
+			_, err := db.AddEvent(&e)
 			if err != nil {
 				b.Fatalf("Error add event: %v", err)
 			}
-			events = append(events, id.Hex())
 		}
 	})
 
 	b.Run("Events", func(b *testing.B) {
-		b.N = 10
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N events (5 readings each)
+		populateDbEvents(db, b.N, 5, 0)
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.Events()
 			if err != nil {
@@ -761,7 +803,13 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventCount", func(b *testing.B) {
-		b.N = 100
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N events (13 readings each)
+		populateDbEvents(db, b.N, 13, 0)
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.EventCount()
 			if err != nil {
@@ -771,10 +819,18 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventById", func(b *testing.B) {
-		b.N = 100
-		if b.N > len(events) {
-			b.N = len(events)
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N events (6 readings each)
+		populateDbEvents(db, b.N, 6, 0)
+		es, _ := db.Events()
+		events := make([]string, len(es))
+		for i, e := range es {
+			events[i] = e.ID.Hex()
 		}
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			_, err := db.EventById(events[i])
 			if err != nil {
@@ -784,10 +840,18 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 	})
 
 	b.Run("EventsForDevice", func(b *testing.B) {
-		b.N = 100
-		if b.N > len(events)/10 {
-			b.N = len(events) / 10
+		b.StopTimer()
+		// Remove previous events and readings
+		db.ScrubAllEvents()
+		// prepare to benchmark b.N Devices (b.N * 10 events each, each event with 7 readings)
+		populateDbEvents(db, b.N*100, 7, 0)
+		es, _ := db.Events()
+		events := make([]string, len(es))
+		for i, e := range es {
+			events[i] = e.ID.Hex()
 		}
+		b.StartTimer()
+
 		for i := 0; i < b.N; i++ {
 			device := "device" + strconv.Itoa(i)
 			_, err := db.EventsForDevice(device)
