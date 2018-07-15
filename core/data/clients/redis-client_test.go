@@ -39,7 +39,7 @@ func TestRedisDB(t *testing.T) {
 	testDB(t, rc)
 }
 
-func BenchmarkRedisDB(b *testing.B) {
+func BenchmarkRedisDB_TCP(b *testing.B) {
 
 	b.Log("This benchmark needs to have a running Redis on localhost")
 
@@ -47,6 +47,30 @@ func BenchmarkRedisDB(b *testing.B) {
 		DbType: REDIS,
 		Host:   "0.0.0.0",
 		Port:   6379,
+	}
+
+	benchmarkDB(b, config)
+}
+
+func BenchmarkRedisDB_UDS(b *testing.B) {
+
+	b.Log("This benchmark needs to have a running Redis listening /tmp/redis.sock")
+
+	config := DBConfiguration{
+		DbType: REDIS,
+		Host:   "/tmp/redis.sock",
+	}
+
+	benchmarkDB(b, config)
+}
+
+func BenchmarkRedisDB_Embedded(b *testing.B) {
+
+	b.Log("This benchmark needs to have liberedis.so at LD_LIBRARY_PATH=$GOROOT/src/github.com/redislabs/eredis/redis/src")
+
+	config := DBConfiguration{
+		DbType: REDIS,
+		Host:   "",
 	}
 
 	benchmarkDB(b, config)

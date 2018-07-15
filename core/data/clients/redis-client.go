@@ -24,7 +24,15 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-var currentRedisClient *RedisClient
+type connectionType int
+
+const (
+	conntypeTCP connectionType = iota
+	conntypeUDS
+	conntypeEredis
+)
+
+var currRedisClients = make([]*RedisClient, 3)
 
 var getObjectsByRange = getObjectsByRangeLua
 var getObjectsByRangeFilter = getObjectsByRangeFilterLua
@@ -32,13 +40,23 @@ var getObjectsByScore = getObjectsByScoreLua
 
 // RedisClient represents a client
 type RedisClient struct {
-	Pool       *redis.Pool // Connections to Redis
-	isEmbedded bool
+	Pool     *redis.Pool // Connections to Redis
+	conntype connectionType
 }
 
 // Return a pointer to the RedisClient
 func newRedisClient(config DBConfiguration) (*RedisClient, error) {
-	if currentRedisClient == nil {
+	// identify the connection's type
+	var conntype connectionType
+	if config.Host == "" {
+		conntype = conntypeEredis
+	} else if string(config.Host[0]) == "/" {
+		conntype = conntypeUDS
+	} else {
+		conntype = conntypeTCP
+	}
+
+	if currRedisClients[conntype] == nil {
 		connectionString := config.Host + ":" + strconv.Itoa(config.Port)
 		loggingClient.Info("INFO: Connecting to Redis at: " + connectionString)
 
@@ -61,21 +79,18 @@ func newRedisClient(config DBConfiguration) (*RedisClient, error) {
 			return conn, nil
 		}
 
-		embedded := (config.Host == "")
-		if embedded {
-			// embedded
+		switch conntype {
+		case conntypeEredis:
 			proto = "eredis"
 			addr = ""
-		} else {
-			if string(config.Host[0]) == "/" {
-				// unix domain socket
-				proto = "unix"
-				addr = config.Host
-			} else {
-				// network connection
-				proto = "tcp"
-				addr = connectionString
-			}
+		case conntypeUDS:
+			proto = "unix"
+			addr = config.Host
+		case conntypeTCP:
+			proto = "tcp"
+			addr = connectionString
+		default:
+			return nil, ErrUnsupportedDatabase
 		}
 
 		pool := &redis.Pool{
@@ -84,10 +99,10 @@ func newRedisClient(config DBConfiguration) (*RedisClient, error) {
 			Dial:        dialFunc,
 		}
 
-		currentRedisClient = &RedisClient{Pool: pool, isEmbedded: (proto == "eredis")}
+		currRedisClients[conntype] = &RedisClient{Pool: pool, conntype: conntype}
 	}
 
-	return currentRedisClient, nil
+	return currRedisClients[conntype], nil
 }
 
 // CloseSession closes the connections to Redis
