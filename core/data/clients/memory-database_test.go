@@ -671,12 +671,18 @@ func benchmarkReadings(b *testing.B, db DBClient) {
 
 	// Remove previous events and readings
 	db.ScrubAllEvents()
-	// prepare to benchmark 1000 readings
-	populateDbReadings(db, 1000)
-	rs, _ := db.Readings()
-	readings := make([]string, len(rs))
-	for i, r := range rs {
-		readings[i] = r.Id.Hex()
+	// prepare to benchmark n readings
+	n := 1000
+	readings := make([]string, n)
+	reading := models.Reading{}
+	for i := 0; i < n; i++ {
+		reading.Name = "test" + strconv.Itoa(i)
+		reading.Device = "device" + strconv.Itoa(i/100)
+		id, err := db.AddReading(reading)
+		if err != nil {
+			b.Fatalf("Error add reading: %v", err)
+		}
+		readings[i] = id.Hex()
 	}
 
 	b.Run("Readings", func(b *testing.B) {
@@ -734,7 +740,6 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 					Name:   fmt.Sprintf("name%d", j),
 				}
 				e.Readings = append(e.Readings, r)
-
 			}
 			_, err := db.AddEvent(&e)
 			if err != nil {
@@ -745,12 +750,26 @@ func benchmarkEvents(b *testing.B, db DBClient) {
 
 	// Remove previous events and readings
 	db.ScrubAllEvents()
-	// prepare to benchmark 1000 events (0 readings each)
-	populateDbEvents(db, 1000, 1)
-	es, _ := db.Events()
-	events := make([]string, len(es))
-	for i, e := range es {
-		events[i] = e.ID.Hex()
+	// prepare to benchmark n events (5 readings each)
+	n := 1000
+	events := make([]string, n)
+	for i := 0; i < n; i++ {
+		device := fmt.Sprintf("device" + strconv.Itoa(i/100))
+		e := models.Event{
+			Device: device,
+		}
+		for j := 0; j < 5; j++ {
+			r := models.Reading{
+				Device: device,
+				Name:   fmt.Sprintf("name%d", j),
+			}
+			e.Readings = append(e.Readings, r)
+		}
+		id, err := db.AddEvent(&e)
+		if err != nil {
+			b.Fatalf("Error add event: %v", err)
+		}
+		events[i] = id.Hex()
 	}
 
 	b.Run("Events", func(b *testing.B) {
