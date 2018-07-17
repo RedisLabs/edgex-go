@@ -127,7 +127,8 @@ func (rc *RedisClient) Events() (events []models.Event, err error) {
 		}
 	}
 
-	events, err = eventsFromObjects(objects)
+	events = make([]models.Event, len(objects))
+	err = eventsFromObjects(objects, &events)
 	if err != nil {
 		return events, err
 	}
@@ -265,7 +266,8 @@ func (rc *RedisClient) EventsForDeviceLimit(id string, limit int) (events []mode
 		}
 	}
 
-	events, err = eventsFromObjects(objects)
+	events = make([]models.Event, len(objects))
+	err = eventsFromObjects(objects, &events)
 	if err != nil {
 		return events, err
 	}
@@ -298,7 +300,8 @@ func (rc *RedisClient) EventsByCreationTime(startTime, endTime int64, limit int)
 		}
 	}
 
-	events, err = eventsFromObjects(objects)
+	events = make([]models.Event, len(objects))
+	err = eventsFromObjects(objects, &events)
 	if err != nil {
 		return events, err
 	}
@@ -324,7 +327,8 @@ func (rc *RedisClient) ReadingsByDeviceAndValueDescriptor(deviceId, valueDescrip
 		return readings, err
 	}
 
-	readings, err = readingsFromObjects(objects)
+	readings = make([]models.Reading, len(objects))
+	err = readingsFromObjects(objects, &readings)
 	if err != nil {
 		return readings, err
 	}
@@ -357,7 +361,8 @@ func (rc *RedisClient) EventsPushed() (events []models.Event, err error) {
 		return events, err
 	}
 
-	events, err = eventsFromObjects(objects)
+	events = make([]models.Event, len(objects))
+	err = eventsFromObjects(objects, &events)
 	if err != nil {
 		return events, err
 	}
@@ -394,7 +399,8 @@ func (rc *RedisClient) Readings() (readings []models.Reading, err error) {
 		return readings, err
 	}
 
-	readings, err = readingsFromObjects(objects)
+	readings = make([]models.Reading, len(objects))
+	err = readingsFromObjects(objects, &readings)
 	if err != nil {
 		return readings, err
 	}
@@ -510,7 +516,8 @@ func (rc *RedisClient) ReadingsByDevice(id string, limit int) (readings []models
 		}
 	}
 
-	readings, err = readingsFromObjects(objects)
+	readings = make([]models.Reading, len(objects))
+	err = readingsFromObjects(objects, &readings)
 	if err != nil {
 		return readings, err
 	}
@@ -531,7 +538,8 @@ func (rc *RedisClient) ReadingsByValueDescriptor(name string, limit int) (readin
 		}
 	}
 
-	readings, err = readingsFromObjects(objects)
+	readings = make([]models.Reading, len(objects))
+	err = readingsFromObjects(objects, &readings)
 	if err != nil {
 		return readings, err
 	}
@@ -557,7 +565,8 @@ func (rc *RedisClient) ReadingsByValueDescriptorNames(names []string, limit int)
 			}
 		}
 
-		t, err := readingsFromObjects(objects)
+		t := make([]models.Reading, len(objects))
+		err = readingsFromObjects(objects, &t)
 		if err != nil {
 			return readings, err
 		}
@@ -597,7 +606,8 @@ func (rc *RedisClient) ReadingsByCreationTime(start, end int64, limit int) (read
 		return readings, err
 	}
 
-	readings, err = readingsFromObjects(objects)
+	readings = make([]models.Reading, len(objects))
+	err = readingsFromObjects(objects, &readings)
 	if err != nil {
 		return readings, err
 	}
@@ -824,6 +834,24 @@ func (rc *RedisClient) ScrubAllValueDescriptors() error {
 }
 
 // ************************** HELPER FUNCTIONS ***************************
+func marshal(v interface{}) ([]byte, error) {
+	return bson.Marshal(v)
+
+	// b := new(bytes.Buffer)
+	// err := gob.NewEncoder(b).Encode(v)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// return b.Bytes(), nil
+}
+
+func unmarshal(data []byte, v interface{}) error {
+	return bson.Unmarshal(data, v)
+
+	// b := bytes.NewBuffer(data)
+	// return gob.NewDecoder(b).Decode(v)
+}
+
 func addEvent(conn redis.Conn, e *models.Event) (err error) {
 	if e.Created == 0 {
 		e.Created = time.Now().UnixNano() / int64(time.Millisecond)
@@ -832,7 +860,7 @@ func addEvent(conn redis.Conn, e *models.Event) (err error) {
 		e.ID = bson.NewObjectId()
 	}
 	id := e.ID.Hex()
-	m, err := bson.Marshal(e)
+	m, err := marshal(e)
 	if err != nil {
 		return err
 	}
@@ -908,7 +936,7 @@ func eventByID(conn redis.Conn, id string) (event models.Event, err error) {
 		return event, err
 	}
 
-	event, err = eventFromObject(obj)
+	err = eventFromObject(obj, &event)
 	if err != nil {
 		return event, err
 	}
@@ -925,7 +953,7 @@ func addReading(conn redis.Conn, tx bool, r *models.Reading) (err error) {
 		r.Id = bson.NewObjectId()
 	}
 	id := r.Id.Hex()
-	m, err := bson.Marshal(r)
+	m, err := marshal(r)
 	if err != nil {
 		return err
 	}
@@ -990,7 +1018,7 @@ func addValue(conn redis.Conn, v *models.ValueDescriptor) (err error) {
 		v.Id = bson.NewObjectId()
 	}
 	id := v.Id.Hex()
-	m, err := bson.Marshal(v)
+	m, err := marshal(v)
 	if err != nil {
 		return err
 	}
@@ -1213,45 +1241,43 @@ func getObjectsByScoreLua(conn redis.Conn, key string, start, end int64, limit i
 	return objects, nil
 }
 
-func eventsFromObjects(objects []interface{}) (events []models.Event, err error) {
-	for _, o := range objects {
-		e, err := eventFromObject(o)
+func eventsFromObjects(objects []interface{}, events *[]models.Event) (err error) {
+	for i, o := range objects {
+		err := eventFromObject(o, &(*events)[i])
 		if err != nil {
-			return events, err
+			return err
 		}
-		events = append(events, e)
 	}
-	return events, nil
+
+	return nil
 }
 
-func eventFromObject(o interface{}) (event models.Event, err error) {
+func eventFromObject(o interface{}, event *models.Event) (err error) {
 	b, err := redis.Bytes(o, nil)
 	if err == redis.ErrNil {
-		return event, ErrNotFound
+		return ErrNotFound
 	}
 	if err != nil {
-		return event, err
+		return err
 	}
 
-	err = bson.Unmarshal(b, &event)
+	err = unmarshal(b, event)
 	if err != nil {
-		return event, err
+		return err
 	}
 
-	return event, nil
+	return nil
 }
 
-func readingsFromObjects(objects []interface{}) (readings []models.Reading, err error) {
-	readings = make([]models.Reading, len(objects))
+func readingsFromObjects(objects []interface{}, readings *[]models.Reading) (err error) {
 	for i, o := range objects {
-		r := models.Reading{}
-		err := readingFromObject(o, &r)
+		err := readingFromObject(o, &(*readings)[i])
 		if err != nil {
-			return readings, err
+			return err
 		}
-		readings[i] = r
 	}
-	return readings, nil
+
+	return nil
 }
 
 func readingFromObject(o interface{}, reading *models.Reading) (err error) {
@@ -1260,7 +1286,7 @@ func readingFromObject(o interface{}, reading *models.Reading) (err error) {
 		return err
 	}
 
-	err = bson.Unmarshal(b, reading)
+	err = unmarshal(b, reading)
 	if err != nil {
 		return err
 	}
@@ -1285,7 +1311,7 @@ func valueFromObject(o interface{}) (value models.ValueDescriptor, err error) {
 		return value, err
 	}
 
-	err = bson.Unmarshal(b, &value)
+	err = unmarshal(b, &value)
 	if err != nil {
 		return value, err
 	}
@@ -1293,6 +1319,7 @@ func valueFromObject(o interface{}) (value models.ValueDescriptor, err error) {
 	return value, nil
 }
 
+// EXPERIMENTAL
 func getObjectsByRangeEmbedded(conn redis.Conn, key string, start, end int) (objects []interface{}, err error) {
 	oids, err := redis.Values(conn.Do("ZRANGE", key, start, end))
 	if err != nil && err != redis.ErrNil {
