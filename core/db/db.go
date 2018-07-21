@@ -24,6 +24,7 @@ const (
 	MongoDB  = "mongodb"
 	InfluxDB = "influxdb"
 	MemoryDB = "memorydb"
+	RedisDB  = "redisdb"
 
 	// Data
 	EventsCollection          = "event"
