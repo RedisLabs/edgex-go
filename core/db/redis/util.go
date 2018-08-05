@@ -22,11 +22,5 @@ func unlinkCollection(conn redis.Conn, col string) error {
 	s = scripts["unlinkCollection"]
 	s.Send(conn, col)
 	_, err := conn.Do("EXEC")
-	if err != nil {
-		if err != redis.ErrNil {
-			return err
-		}
-	}
-
 	return err
 }
