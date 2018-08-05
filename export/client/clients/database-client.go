@@ -122,7 +122,7 @@ func NewDBClient(config DBConfiguration) (DBClient, error) {
 		// Create the Redis client
 		return newRedisClient(config)
 	case MEMORY:
-		return &memDB{}, nil
+		return newMemoryClient(), nil
 	default:
 		return nil, ErrUnsupportedDatabase
 	}

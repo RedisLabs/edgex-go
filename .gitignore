@@ -3,6 +3,8 @@ vendor
 *.exe
 glide.lock
 *.DS_Store
+docker/docker-compose.yml
+.project
 
 # binary files
 cmd/core-command/core-command
